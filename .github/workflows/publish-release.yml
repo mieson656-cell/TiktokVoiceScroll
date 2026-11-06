@@ -1,0 +1,59 @@
+name: Publish Release
+
+on:
+  workflow_run:
+    workflows: ["Build APK"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  release:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download APK from successful build
+        uses: actions/download-artifact@v4
+        with:
+          name: VoiceScroll-debug-apk
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+          path: dist
+
+      - name: Find APK
+        id: apk
+        shell: bash
+        run: |
+          APK="$(find dist -type f -name '*.apk' -print -quit)"
+          if [ -z "$APK" ]; then
+            echo "No APK found in VoiceScroll-debug-apk artifact"
+            find dist -maxdepth 3 -type f -print
+            exit 1
+          fi
+          echo "path=$APK" >> "$GITHUB_OUTPUT"
+
+      - name: Publish versioned GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.event.workflow_run.run_number }}
+          target_commitish: ${{ github.event.workflow_run.head_sha }}
+          name: VoiceScroll v1.0.${{ github.event.workflow_run.run_number }}
+          files: ${{ steps.apk.outputs.path }}
+          generate_release_notes: true
+          body: |
+            ## VoiceScroll v1.0.${{ github.event.workflow_run.run_number }}
+
+            APK автоматически собран GitHub Actions после успешной проверки Build APK.
+
+            ### Возможности
+            - Голосовое управление TikTok и YouTube
+            - Свайпы «Дальше» и «Назад»
+            - Пауза и продолжение видео
+            - Голосовой поиск
+            - Лайк и подписка
+            - Вставка текста комментария без автоматической отправки
+
+            Версия Android-приложения: 1.0.${{ github.event.workflow_run.run_number }}.
