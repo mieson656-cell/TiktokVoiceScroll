@@ -138,7 +138,7 @@ class ListenService : Service() {
     }
 
     /**
-     * Берём звук напрямую через AudioRecord, чтобы включить системные AGC и NoiseSuppressor.
+     * Берём звук напрямую через обычный MIC AudioRecord: на некоторых прошивках Samsung VOICE_RECOGNITION может отдавать тишину. Включаем системные AGC и NoiseSuppressor, если доступны.
      * Это помогает вытянуть тихую речь и подавить постоянный фоновый шум, если устройство поддерживает эффекты.
      */
     private fun startRec() {
@@ -148,7 +148,7 @@ class ListenService : Service() {
             if (minBuffer <= 0) throw IllegalStateException("Недоступен формат микрофона 16 кГц")
             val bufferSize = maxOf(minBuffer * 2, SAMPLE_RATE * 2)
             val recorder = AudioRecord(
-                MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                MediaRecorder.AudioSource.MIC,
                 SAMPLE_RATE,
                 AudioFormat.CHANNEL_IN_MONO,
                 AudioFormat.ENCODING_PCM_16BIT,
