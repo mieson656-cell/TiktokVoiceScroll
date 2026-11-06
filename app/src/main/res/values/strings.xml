@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Голосовой TikTok</string>
+    <string name="a11y_desc">Выполняет свайпы вверх и вниз в TikTok по вашим голосовым командам и определяет, открыт ли TikTok. Содержимое экрана не читается.</string>
+</resources>
