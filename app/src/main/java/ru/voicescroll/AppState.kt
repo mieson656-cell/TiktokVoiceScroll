@@ -14,6 +14,8 @@ object AppState {
     var paused = false; private set
     var lastCommand = "—"
     var message = ""
+    var liveText = "Ожидание микрофона…"
+    var inputLevel = -90
 
     val appLabel: String get() = when (target) {
         Target.TIKTOK -> "TikTok"
@@ -31,8 +33,8 @@ object AppState {
         ctx.getSharedPreferences("p", Context.MODE_PRIVATE).getInt("sens", 50)
     fun saveSensitivity(ctx: Context, v: Int) =
         ctx.getSharedPreferences("p", Context.MODE_PRIVATE).edit().putInt("sens", v).apply()
-    /** Минимальная уверенность распознавания: чувствительность 0 -> 0.85, 100 -> 0.25 */
-    fun threshold(ctx: Context) = 0.85 - 0.6 * (sensitivity(ctx) / 100.0)
+    /** На максимуме принимаем менее уверенные варианты; команда дополнительно проверяется по словам. */
+    fun threshold(ctx: Context) = 0.85 - 0.73 * (sensitivity(ctx) / 100.0)
 
     fun swipeDuration(ctx: Context) =
         ctx.getSharedPreferences("p", Context.MODE_PRIVATE).getInt("swipe_ms", 220)

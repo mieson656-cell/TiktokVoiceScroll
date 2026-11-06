@@ -5,16 +5,21 @@ import android.app.*
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.media.AudioFormat
+import android.media.AudioRecord
+import android.media.MediaRecorder
+import android.media.audiofx.AutomaticGainControl
+import android.media.audiofx.NoiseSuppressor
 import android.os.*
 import org.json.JSONObject
 import org.vosk.LibVosk
 import org.vosk.LogLevel
 import org.vosk.Model
 import org.vosk.Recognizer
-import org.vosk.android.RecognitionListener
-import org.vosk.android.SpeechService
 import java.io.File
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.sqrt
 
 class ListenService : Service() {
     companion object {
@@ -25,13 +30,18 @@ class ListenService : Service() {
         private const val CHANNEL = "listen"
         private const val NID = 1
         private const val COOLDOWN_MS = 1100L
+        private const val SAMPLE_RATE = 16000
     }
 
     private val worker = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
     private var model: Model? = null
-    private var speech: SpeechService? = null
     private var recognizer: Recognizer? = null
+    private var audioRecord: AudioRecord? = null
+    private var gainControl: AutomaticGainControl? = null
+    private var noiseSuppressor: NoiseSuppressor? = null
+    private var audioThread: Thread? = null
+    private val audioRunning = AtomicBoolean(false)
     private var running = false
     private var stoppedByVoice = false
     private var playbackPaused = false
@@ -72,6 +82,7 @@ class ListenService : Service() {
         playbackPaused = false
         AppState.setPaused(false)
         AppState.message = ""
+        AppState.liveText = "Подготовка микрофона…"
         AppState.setMode(AppState.Mode.LOADING)
         worker.execute {
             try {
@@ -110,11 +121,11 @@ class ListenService : Service() {
     private fun evaluate() {
         if (!running || model == null) return
         val want = !stoppedByVoice && (AppState.target != AppState.Target.NONE || AppState.testMode)
-        if (want && speech == null) startRec() else if (!want && speech != null) stopRec()
+        if (want && audioRecord == null) startRec() else if (!want && audioRecord != null) stopRec()
         AppState.setMode(when {
             stoppedByVoice -> AppState.Mode.STOPPED
-            speech != null && AppState.paused -> AppState.Mode.PAUSED
-            speech != null -> AppState.Mode.LISTENING
+            audioRecord != null && AppState.paused -> AppState.Mode.PAUSED
+            audioRecord != null -> AppState.Mode.LISTENING
             else -> AppState.Mode.WAITING
         })
         getSystemService(NotificationManager::class.java).notify(NID, notification(
@@ -126,34 +137,116 @@ class ListenService : Service() {
             }))
     }
 
+    /**
+     * Берём звук напрямую через AudioRecord, чтобы включить системные AGC и NoiseSuppressor.
+     * Это помогает вытянуть тихую речь и подавить постоянный фоновый шум, если устройство поддерживает эффекты.
+     */
     private fun startRec() {
         try {
-            // Без фиксированной грамматики: нужна расшифровка произвольного текста после «поиск» и «комментарий».
-            val rec = Recognizer(model, 16000f)
+            val minBuffer = AudioRecord.getMinBufferSize(
+                SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+            if (minBuffer <= 0) throw IllegalStateException("Недоступен формат микрофона 16 кГц")
+            val bufferSize = maxOf(minBuffer * 2, SAMPLE_RATE * 2)
+            val recorder = AudioRecord(
+                MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                SAMPLE_RATE,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                bufferSize
+            )
+            if (recorder.state != AudioRecord.STATE_INITIALIZED) {
+                recorder.release()
+                throw IllegalStateException("Android не смог открыть микрофон")
+            }
+            val rec = Recognizer(model, SAMPLE_RATE.toFloat())
             rec.setWords(true)
-            val ss = SpeechService(rec, 16000f)
-            recognizer = rec; speech = ss
-            ss.startListening(object : RecognitionListener {
-                override fun onResult(h: String?) { if (h != null) handle(h) }
-                override fun onPartialResult(h: String?) {}
-                override fun onFinalResult(h: String?) { if (h != null) handle(h) }
-                override fun onError(e: Exception?) { fail("Ошибка микрофона: ${e?.message}") }
-                override fun onTimeout() {}
-            })
+            audioRecord = recorder
+            recognizer = rec
+
+            if (AutomaticGainControl.isAvailable()) {
+                try {
+                    gainControl = AutomaticGainControl.create(recorder.audioSessionId)?.apply { enabled = true }
+                } catch (_: Throwable) { gainControl = null }
+            }
+            if (NoiseSuppressor.isAvailable()) {
+                try {
+                    noiseSuppressor = NoiseSuppressor.create(recorder.audioSessionId)?.apply { enabled = true }
+                } catch (_: Throwable) { noiseSuppressor = null }
+            }
+
+            recorder.startRecording()
+            if (recorder.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                throw IllegalStateException("Микрофон не перешёл в режим записи")
+            }
+            audioRunning.set(true)
+            AppState.liveText = buildString {
+                append("Микрофон активен · ")
+                append(if (gainControl?.enabled == true) "автоусиление включено" else "автоусиление недоступно")
+                append(" · ")
+                append(if (noiseSuppressor?.enabled == true) "шумоподавление включено" else "шумоподавление недоступно")
+            }
+            AppState.fire()
+
+            audioThread = Thread({
+                val data = ByteArray(2048)
+                try {
+                    while (audioRunning.get()) {
+                        val count = recorder.read(data, 0, data.size)
+                        if (count > 0) {
+                            var energy = 0.0
+                            val samples = count / 2
+                            var i = 0
+                            while (i + 1 < count) {
+                                val sample = ((data[i + 1].toInt() shl 8) or (data[i].toInt() and 0xff)).toShort().toInt()
+                                energy += sample.toDouble() * sample.toDouble()
+                                i += 2
+                            }
+                            val rms = if (samples > 0) sqrt(energy / samples).toInt() else 0
+                            val db = if (rms > 0) (20.0 * kotlin.math.log10(rms / 32768.0)).toInt() else -90
+                            val accepted = rec.acceptWaveForm(data, count)
+                            val result = if (accepted) rec.result else rec.partialResult
+                            val text = JSONObject(result).optString("text").trim()
+                            main.post {
+                                AppState.inputLevel = db.coerceIn(-90, 0)
+                                if (text.isNotEmpty()) AppState.liveText = "Слышу: $text"
+                                AppState.fire()
+                            }
+                            if (accepted && text.isNotEmpty()) handle(result)
+                        } else if (count < 0 && audioRunning.get()) {
+                            throw IllegalStateException("Ошибка чтения микрофона: $count")
+                        }
+                    }
+                } catch (e: Throwable) {
+                    if (audioRunning.get()) main.post { fail("Ошибка микрофона: ${e.message}") }
+                }
+            }, "VoiceScroll-Audio").apply { isDaemon = true; start() }
         } catch (e: Throwable) {
-            stopRec(); fail("Не удалось запустить микрофон: ${e.message}")
+            stopRec()
+            fail("Не удалось запустить микрофон: ${e.message}")
         }
     }
 
     private fun stopRec() {
-        try { speech?.stop(); speech?.shutdown() } catch (_: Throwable) {}
+        audioRunning.set(false)
+        try { audioRecord?.stop() } catch (_: Throwable) {}
+        try { audioRecord?.release() } catch (_: Throwable) {}
+        try { gainControl?.release() } catch (_: Throwable) {}
+        try { noiseSuppressor?.release() } catch (_: Throwable) {}
         try { recognizer?.close() } catch (_: Throwable) {}
-        speech = null; recognizer = null
+        audioRecord = null
+        gainControl = null
+        noiseSuppressor = null
+        recognizer = null
+        audioThread = null
+        AppState.inputLevel = -90
     }
 
     private fun handle(json: String) {
         val o = JSONObject(json)
         val spoken = o.optString("text").trim().lowercase()
+            .replace(Regex("[^\\p{L}\\p{N} ]"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
         if (spoken.isEmpty() || spoken == "[unk]") return
         val arr = o.optJSONArray("result")
         var conf = 1.0
@@ -164,19 +257,17 @@ class ListenService : Service() {
         }
         if (conf < AppState.threshold(this)) return
 
-        val prefixes = listOf("поиск ", "найди ", "комментарий ", "напиши комментарий ")
+        val words = spoken.split(" ").toSet()
         val cmd = when {
-            spoken.startsWith("поиск ") -> "поиск"
-            spoken.startsWith("найди ") -> "поиск"
-            spoken.startsWith("напиши комментарий ") -> "комментарий"
-            spoken.startsWith("комментарий ") -> "комментарий"
-            spoken == "дальше" || spoken == "следующее" -> "дальше"
-            spoken == "назад" || spoken == "предыдущее" -> "назад"
-            spoken == "пауза" || spoken == "останови видео" -> "пауза"
-            spoken == "продолжить" || spoken == "воспроизведение" -> "продолжить"
-            spoken == "лайк" || spoken == "поставь лайк" -> "лайк"
-            spoken == "подпишись" || spoken == "подписаться" -> "подпишись"
-            spoken == "стоп" -> "стоп"
+            spoken.startsWith("поиск ") || spoken.startsWith("найди ") -> "поиск"
+            spoken.startsWith("напиши комментарий ") || spoken.startsWith("комментарий ") -> "комментарий"
+            "дальше" in words || "следующее" in words || "следующий" in words -> "дальше"
+            "назад" in words || "предыдущее" in words || "предыдущий" in words -> "назад"
+            "пауза" in words || ("останови" in words && "видео" in words) -> "пауза"
+            "продолжить" in words || "воспроизведение" in words -> "продолжить"
+            "лайк" in words || ("поставь" in words && "нравится" in words) -> "лайк"
+            "подпишись" in words || "подписаться" in words -> "подпишись"
+            "стоп" in words -> "стоп"
             else -> return
         }
         val now = SystemClock.elapsedRealtime()

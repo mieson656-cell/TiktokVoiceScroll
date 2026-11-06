@@ -21,6 +21,7 @@ class MainActivity : Activity() {
     private lateinit var micV: TextView
     private lateinit var appV: TextView
     private lateinit var cmdV: TextView
+    private lateinit var liveV: TextView
     private lateinit var warnV: TextView
     private lateinit var mainBtn: Button
     private lateinit var stopBtn: Button
@@ -126,6 +127,9 @@ class MainActivity : Activity() {
         addGap(state, 10)
         cmdV = text("Последняя команда: —", 14f, green, true)
         state.addView(cmdV)
+        addGap(state, 7)
+        liveV = text("Слышу: ожидание микрофона…", 13f, orange)
+        state.addView(liveV)
         addGap(state, 14)
 
         mainBtn = Button(this).apply {
@@ -274,6 +278,7 @@ class MainActivity : Activity() {
         micV.text = "Микрофон: " + if (m == AppState.Mode.LISTENING || m == AppState.Mode.PAUSED) "активен" else "выключен"
         appV.text = "Приложение: " + if (AppState.target != AppState.Target.NONE) "${AppState.appLabel} открыто" else "не открыто"
         cmdV.text = "Последняя команда: ${AppState.lastCommand}"
+        liveV.text = "${AppState.liveText} · уровень ${AppState.inputLevel} dBFS"
         mainBtn.text = when (m) {
             AppState.Mode.OFF, AppState.Mode.ERROR -> "Запустить"
             AppState.Mode.STOPPED -> "Запустить снова"
