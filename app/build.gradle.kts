@@ -9,11 +9,30 @@ android {
         applicationId = "ru.voicescroll"
         minSdk = 29
         targetSdk = 35
-        // CI run number makes every published APK a proper Android upgrade.
         val ciBuild = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
         versionCode = ciBuild
         versionName = "1.0.$ciBuild"
         ndk { abiFilters += "arm64-v8a" }
+    }
+    val keystorePath = System.getenv("KEYSTORE_PATH")
+    val keystorePassword = System.getenv("KEYSTORE_PASSWORD")
+    val keyAliasValue = System.getenv("KEY_ALIAS")
+    val keyPasswordValue = System.getenv("KEY_PASSWORD")
+    if (!keystorePath.isNullOrBlank() && !keystorePassword.isNullOrBlank()
+        && !keyAliasValue.isNullOrBlank() && !keyPasswordValue.isNullOrBlank()) {
+        signingConfigs {
+            create("persistentRelease") {
+                storeFile = file(keystorePath)
+                storePassword = keystorePassword
+                keyAlias = keyAliasValue
+                keyPassword = keyPasswordValue
+            }
+        }
+        buildTypes {
+            getByName("debug") {
+                signingConfig = signingConfigs.getByName("persistentRelease")
+            }
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
