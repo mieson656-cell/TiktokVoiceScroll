@@ -1,4 +1,5 @@
 name: Build APK
+# Trigger a fresh build so the release workflow runs after completion.
 on:
   push:
   workflow_dispatch:
