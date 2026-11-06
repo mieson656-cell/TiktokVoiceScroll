@@ -277,8 +277,8 @@ class MainActivity : Activity() {
         mainBtn.text = when (m) {
             AppState.Mode.OFF, AppState.Mode.ERROR -> "Запустить"
             AppState.Mode.STOPPED -> "Запустить снова"
-            AppState.Mode.PAUSED -> "Продолжить"
-            else -> "Пауза"
+            AppState.Mode.PAUSED -> "Возобновить команды"
+            else -> "Приостановить команды"
         }
         stopBtn.isEnabled = m != AppState.Mode.OFF
         stopBtn.alpha = if (stopBtn.isEnabled) 1f else 0.5f
@@ -329,7 +329,7 @@ class MainActivity : Activity() {
     private fun showA11yHelp() {
         AlertDialog.Builder(this)
             .setTitle("Служба специальных возможностей")
-            .setMessage("Она нужна для свайпов и определения, открыты ли TikTok или YouTube.\n\n1. Настройки → Специальные возможности → Установленные службы → «VoiceScroll» → Включить.\n\nЕсли пункт серый («ограниченная настройка»): Настройки → Приложения → «Голосовой TikTok» → ⋮ → «Разрешить ограниченные настройки», затем повтори шаг 1.")
+            .setMessage("Она нужна для свайпов и определения, открыты ли TikTok или YouTube.\n\n1. Настройки → Специальные возможности → Установленные службы → «VoiceScroll» → Включить.\n\nЕсли пункт серый («ограниченная настройка»): Настройки → Приложения → «VoiceScroll» → ⋮ → «Разрешить ограниченные настройки», затем повтори шаг 1.")
             .setPositiveButton("Открыть настройки") { _, _ -> startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
             .setNeutralButton("О приложении") { _, _ ->
                 startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
