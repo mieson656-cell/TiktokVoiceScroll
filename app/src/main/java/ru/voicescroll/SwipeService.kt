@@ -73,7 +73,9 @@ class SwipeService : AccessibilityService() {
         val nodes = allNodes(rootInActiveWindow)
         val target = nodes.firstOrNull { n ->
             val s = listOfNotNull(n.text?.toString(), n.contentDescription?.toString()).joinToString(" ").lowercase()
-            n.isVisibleToUser && n.isEnabled && terms.any { s.contains(it.lowercase()) }
+            val unsafeLikeToggle = terms.any { it == "нравится" || it == "мне нравится" || it == "like" } &&
+                listOf("убрать", "не нравится", "remove", "dislike").any { s.contains(it) }
+            n.isVisibleToUser && n.isEnabled && !unsafeLikeToggle && terms.any { s.contains(it.lowercase()) }
         } ?: return false
         var n: AccessibilityNodeInfo? = target
         while (n != null) {
@@ -98,9 +100,12 @@ class SwipeService : AccessibilityService() {
 
     fun search(query: String): Boolean {
         if (query.isBlank()) return false
+        // Открываем экран поиска, затем ждём появления поля и клавиатуры.
         if (!clickText("поиск", "search", "найти")) return false
-        return setTextOnField(query, listOf("поиск", "search")) ||
-            setTextOnField(query, emptyList())
+        android.os.Handler(mainLooper).postDelayed({
+            setTextOnField(query, listOf("поиск", "search")) || setTextOnField(query, emptyList())
+        }, 350)
+        return true
     }
 
     fun like(): Boolean = clickText("нравится", "мне нравится", "like")
@@ -113,7 +118,9 @@ class SwipeService : AccessibilityService() {
     fun comment(text: String): Boolean {
         if (text.isBlank()) return false
         if (!clickText("добавить комментарий", "комментарий", "комментировать", "add a comment")) return false
-        return setTextOnField(text, listOf("комментар", "comment")) ||
-            setTextOnField(text, emptyList())
+        android.os.Handler(mainLooper).postDelayed({
+            setTextOnField(text, listOf("комментар", "comment")) || setTextOnField(text, emptyList())
+        }, 350)
+        return true
     }
 }
