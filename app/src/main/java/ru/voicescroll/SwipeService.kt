@@ -35,8 +35,9 @@ class SwipeService : AccessibilityService() {
         val a = m.heightPixels * 0.72f
         val b = m.heightPixels * 0.28f
         val path = Path().apply { if (up) { moveTo(x, a); lineTo(x, b) } else { moveTo(x, b); lineTo(x, a) } }
+        val duration = AppState.swipeDuration(this).toLong()
         val g = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, 220)).build()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, duration)).build()
         return dispatchGesture(g, null, null)
     }
 }
