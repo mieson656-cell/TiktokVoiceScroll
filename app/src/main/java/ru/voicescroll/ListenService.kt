@@ -21,11 +21,12 @@ class ListenService : Service() {
         const val ACTION_START = "start"
         const val ACTION_STOP = "stop"
         const val ACTION_RESUME = "resume"
+        const val ACTION_PAUSE = "pause"
         private const val CHANNEL = "listen"
         private const val NID = 1
-        private const val GRAMMAR = "[\"дальше\", \"назад\", \"стоп\", \"[unk]\"]"
-        private const val COOLDOWN_MS = 1500L
-        private val COMMANDS = setOf("дальше", "назад", "стоп")
+        private const val GRAMMAR = "[\"дальше\", \"назад\", \"пауза\", \"продолжить\", \"стоп\", \"[unk]\"]"
+        private const val COOLDOWN_MS = 1200L
+        private val COMMANDS = setOf("дальше", "назад", "пауза", "продолжить", "стоп")
     }
 
     private val worker = Executors.newSingleThreadExecutor()
@@ -50,7 +51,12 @@ class ListenService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> shutdown()
-            ACTION_RESUME -> { stoppedByVoice = false; evaluate() }
+            ACTION_PAUSE -> AppState.setPaused(true)
+            ACTION_RESUME -> {
+                if (stoppedByVoice || !running) { stoppedByVoice = false; start() }
+                AppState.setPaused(false)
+                evaluate()
+            }
             else -> start()
         }
         return START_NOT_STICKY
@@ -61,8 +67,10 @@ class ListenService : Service() {
             stopSelf(); return
         }
         startForeground(NID, notification("Загрузка модели…"), ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
-        if (running) return
-        running = true; stoppedByVoice = false
+        if (running) { evaluate(); return }
+        running = true
+        stoppedByVoice = false
+        AppState.setPaused(false)
         AppState.message = ""
         AppState.setMode(AppState.Mode.LOADING)
         worker.execute {
@@ -98,20 +106,22 @@ class ListenService : Service() {
         }
     }
 
-    /** Единая точка: слушаем только если TikTok открыт (или включена проверка) и не было «Стоп». */
+    /** Слушаем только когда TikTok открыт (или включён тестовый режим) и не было команды «Стоп». */
     private fun evaluate() {
         if (!running || model == null) return
         val want = !stoppedByVoice && (AppState.tiktok || AppState.testMode)
         if (want && speech == null) startRec() else if (!want && speech != null) stopRec()
         AppState.setMode(when {
             stoppedByVoice -> AppState.Mode.STOPPED
+            speech != null && AppState.paused -> AppState.Mode.PAUSED
             speech != null -> AppState.Mode.LISTENING
             else -> AppState.Mode.WAITING
         })
         getSystemService(NotificationManager::class.java).notify(NID, notification(
             when (AppState.mode) {
-                AppState.Mode.LISTENING -> "Слушаю: «Дальше», «Назад», «Стоп»"
-                AppState.Mode.STOPPED -> "Остановлено командой «Стоп»"
+                AppState.Mode.LISTENING -> "Слушаю команды"
+                AppState.Mode.PAUSED -> "Пауза — скажите «Продолжить»"
+                AppState.Mode.STOPPED -> "Остановлено — нажмите «Продолжить»"
                 else -> "Ожидание: откройте TikTok"
             }))
     }
@@ -154,20 +164,31 @@ class ListenService : Service() {
         }
         if (conf < AppState.threshold(this)) return
         val now = SystemClock.elapsedRealtime()
-        if (now - lastCmdAt < COOLDOWN_MS) return   // защита от повторов
+        if (now - lastCmdAt < COOLDOWN_MS) return
         lastCmdAt = now
         AppState.lastCommand = "«${cmd.replaceFirstChar { it.uppercase() }}» (${(conf * 100).toInt()}%)"
         when (cmd) {
-            "стоп" -> { stoppedByVoice = true; evaluate(); return }
+            "стоп" -> {
+                stoppedByVoice = true
+                AppState.setPaused(false)
+                evaluate()
+                AppState.fire()
+                return
+            }
+            "пауза" -> AppState.setPaused(true)
+            "продолжить" -> AppState.setPaused(false)
             "дальше", "назад" -> {
-                if (AppState.tiktok) {
+                if (AppState.paused) {
+                    AppState.message = "Пауза включена — скажите «Продолжить»"
+                } else if (AppState.tiktok) {
                     val s = SwipeService.instance
                     AppState.message = if (s == null) "Служба спец. возможностей выключена"
                     else if (!s.swipe(cmd == "дальше")) "Свайп не выполнен" else ""
-                } else AppState.message = "Проверка: свайп не выполняется вне TikTok"
+                } else AppState.message = "Тест: свайп не выполняется вне TikTok"
             }
         }
         AppState.fire()
+        evaluate()
     }
 
     private fun fail(msg: String) {
@@ -177,6 +198,8 @@ class ListenService : Service() {
 
     private fun shutdown(final: AppState.Mode = AppState.Mode.OFF) {
         running = false
+        stoppedByVoice = false
+        AppState.setPaused(false)
         stopRec()
         AppState.setMode(final)
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -197,11 +220,13 @@ class ListenService : Service() {
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         val b = Notification.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setContentTitle("Голосовой TikTok")
+            .setContentTitle("VoiceScroll")
             .setContentText(text)
             .setContentIntent(open)
             .setOngoing(true)
-        if (stoppedByVoice) b.addAction(Notification.Action.Builder(null, "Продолжить", act(ACTION_RESUME, 2)).build())
+        if (AppState.paused) b.addAction(Notification.Action.Builder(null, "Продолжить", act(ACTION_RESUME, 2)).build())
+        else b.addAction(Notification.Action.Builder(null, "Пауза", act(ACTION_PAUSE, 3)).build())
+        if (stoppedByVoice) b.addAction(Notification.Action.Builder(null, "Запустить", act(ACTION_RESUME, 2)).build())
         b.addAction(Notification.Action.Builder(null, "Выключить", act(ACTION_STOP, 1)).build())
         return b.build()
     }
