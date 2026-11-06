@@ -24,9 +24,7 @@ class ListenService : Service() {
         const val ACTION_PAUSE = "pause"
         private const val CHANNEL = "listen"
         private const val NID = 1
-        private const val GRAMMAR = "[\"дальше\", \"назад\", \"пауза\", \"продолжить\", \"стоп\", \"[unk]\"]"
-        private const val COOLDOWN_MS = 1200L
-        private val COMMANDS = setOf("дальше", "назад", "пауза", "продолжить", "стоп")
+        private const val COOLDOWN_MS = 1100L
     }
 
     private val worker = Executors.newSingleThreadExecutor()
@@ -36,6 +34,7 @@ class ListenService : Service() {
     private var recognizer: Recognizer? = null
     private var running = false
     private var stoppedByVoice = false
+    private var playbackPaused = false
     private var lastCmdAt = 0L
     private val stateListener: () -> Unit = { evaluate() }
 
@@ -43,8 +42,8 @@ class ListenService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(NotificationChannel(CHANNEL, "Прослушивание команд", NotificationManager.IMPORTANCE_LOW))
+        getSystemService(NotificationManager::class.java).createNotificationChannel(
+            NotificationChannel(CHANNEL, "Прослушивание команд", NotificationManager.IMPORTANCE_LOW))
         AppState.listeners.add(stateListener)
     }
 
@@ -70,6 +69,7 @@ class ListenService : Service() {
         if (running) { evaluate(); return }
         running = true
         stoppedByVoice = false
+        playbackPaused = false
         AppState.setPaused(false)
         AppState.message = ""
         AppState.setMode(AppState.Mode.LOADING)
@@ -106,10 +106,10 @@ class ListenService : Service() {
         }
     }
 
-    /** Слушаем только когда TikTok открыт (или включён тестовый режим) и не было команды «Стоп». */
+    /** Микрофон активен, когда открыто одно из поддерживаемых приложений. */
     private fun evaluate() {
         if (!running || model == null) return
-        val want = !stoppedByVoice && (AppState.tiktok || AppState.testMode)
+        val want = !stoppedByVoice && (AppState.target != AppState.Target.NONE || AppState.testMode)
         if (want && speech == null) startRec() else if (!want && speech != null) stopRec()
         AppState.setMode(when {
             stoppedByVoice -> AppState.Mode.STOPPED
@@ -119,23 +119,24 @@ class ListenService : Service() {
         })
         getSystemService(NotificationManager::class.java).notify(NID, notification(
             when (AppState.mode) {
-                AppState.Mode.LISTENING -> "Слушаю команды"
-                AppState.Mode.PAUSED -> "Пауза — скажите «Продолжить»"
+                AppState.Mode.LISTENING -> "Слушаю команды · ${AppState.appLabel}"
+                AppState.Mode.PAUSED -> "Команды ограничены паузой"
                 AppState.Mode.STOPPED -> "Остановлено — нажмите «Продолжить»"
-                else -> "Ожидание: откройте TikTok"
+                else -> "Откройте TikTok или YouTube"
             }))
     }
 
     private fun startRec() {
         try {
-            val rec = Recognizer(model, 16000f, GRAMMAR)
+            // Без фиксированной грамматики: нужна расшифровка произвольного текста после «поиск» и «комментарий».
+            val rec = Recognizer(model, 16000f)
             rec.setWords(true)
             val ss = SpeechService(rec, 16000f)
             recognizer = rec; speech = ss
             ss.startListening(object : RecognitionListener {
                 override fun onResult(h: String?) { if (h != null) handle(h) }
                 override fun onPartialResult(h: String?) {}
-                override fun onFinalResult(h: String?) {}
+                override fun onFinalResult(h: String?) { if (h != null) handle(h) }
                 override fun onError(e: Exception?) { fail("Ошибка микрофона: ${e?.message}") }
                 override fun onTimeout() {}
             })
@@ -152,40 +153,89 @@ class ListenService : Service() {
 
     private fun handle(json: String) {
         val o = JSONObject(json)
-        val text = o.optString("text").trim()
-        if (text.isEmpty() || text == "[unk]") return
-        val cmd = text.split(" ").firstOrNull { it in COMMANDS } ?: return
+        val spoken = o.optString("text").trim().lowercase()
+        if (spoken.isEmpty() || spoken == "[unk]") return
         val arr = o.optJSONArray("result")
         var conf = 1.0
         if (arr != null && arr.length() > 0) {
-            var s = 0.0
-            for (i in 0 until arr.length()) s += arr.getJSONObject(i).optDouble("conf", 1.0)
-            conf = s / arr.length()
+            var sum = 0.0
+            for (i in 0 until arr.length()) sum += arr.getJSONObject(i).optDouble("conf", 1.0)
+            conf = sum / arr.length()
         }
         if (conf < AppState.threshold(this)) return
+
+        val prefixes = listOf("поиск ", "найди ", "комментарий ", "напиши комментарий ")
+        val cmd = when {
+            spoken.startsWith("поиск ") -> "поиск"
+            spoken.startsWith("найди ") -> "поиск"
+            spoken.startsWith("напиши комментарий ") -> "комментарий"
+            spoken.startsWith("комментарий ") -> "комментарий"
+            spoken == "дальше" || spoken == "следующее" -> "дальше"
+            spoken == "назад" || spoken == "предыдущее" -> "назад"
+            spoken == "пауза" || spoken == "останови видео" -> "пауза"
+            spoken == "продолжить" || spoken == "воспроизведение" -> "продолжить"
+            spoken == "лайк" || spoken == "поставь лайк" -> "лайк"
+            spoken == "подпишись" || spoken == "подписаться" -> "подпишись"
+            spoken == "стоп" -> "стоп"
+            else -> return
+        }
         val now = SystemClock.elapsedRealtime()
         if (now - lastCmdAt < COOLDOWN_MS) return
         lastCmdAt = now
         AppState.lastCommand = "«${cmd.replaceFirstChar { it.uppercase() }}» (${(conf * 100).toInt()}%)"
-        when (cmd) {
-            "стоп" -> {
-                stoppedByVoice = true
-                AppState.setPaused(false)
-                evaluate()
-                AppState.fire()
-                return
+        val payload = when {
+            spoken.startsWith("поиск ") -> spoken.removePrefix("поиск ").trim()
+            spoken.startsWith("найди ") -> spoken.removePrefix("найди ").trim()
+            spoken.startsWith("напиши комментарий ") -> spoken.removePrefix("напиши комментарий ").trim()
+            spoken.startsWith("комментарий ") -> spoken.removePrefix("комментарий ").trim()
+            else -> ""
+        }
+        main.post { executeCommand(cmd, payload) }
+    }
+
+    private fun executeCommand(cmd: String, payload: String) {
+        if (cmd == "стоп") {
+            stoppedByVoice = true
+            AppState.setPaused(false)
+            evaluate()
+            AppState.fire()
+            return
+        }
+        if (AppState.target == AppState.Target.NONE && !AppState.testMode) return
+        if (AppState.paused) {
+            AppState.message = "Управление приостановлено кнопкой в приложении"
+            AppState.fire()
+            return
+        }
+        val service = SwipeService.instance
+        val ok = when (cmd) {
+            "пауза" -> {
+                if (!playbackPaused) {
+                    val done = service?.togglePlayback() == true
+                    if (done) playbackPaused = true
+                    done
+                } else true
             }
-            "пауза" -> AppState.setPaused(true)
-            "продолжить" -> AppState.setPaused(false)
-            "дальше", "назад" -> {
-                if (AppState.paused) {
-                    AppState.message = "Пауза включена — скажите «Продолжить»"
-                } else if (AppState.tiktok) {
-                    val s = SwipeService.instance
-                    AppState.message = if (s == null) "Служба спец. возможностей выключена"
-                    else if (!s.swipe(cmd == "дальше")) "Свайп не выполнен" else ""
-                } else AppState.message = "Тест: свайп не выполняется вне TikTok"
+            "продолжить" -> {
+                if (playbackPaused) {
+                    val done = service?.togglePlayback() == true
+                    if (done) playbackPaused = false
+                    done
+                } else true
             }
+            "дальше" -> service?.swipe(true) == true
+            "назад" -> service?.swipe(false) == true
+            "поиск" -> service?.search(payload) == true
+            "лайк" -> service?.like() == true
+            "подпишись" -> service?.follow() == true
+            "комментарий" -> service?.comment(payload) == true
+            else -> false
+        }
+        AppState.message = when {
+            ok && cmd == "комментарий" -> "Текст вставлен в комментарий. Самостоятельно проверь и отправь."
+            ok && cmd == "поиск" -> "Поисковый запрос введён."
+            ok -> ""
+            else -> "Не удалось выполнить «$cmd»: элемент интерфейса не найден или действие недоступно."
         }
         AppState.fire()
         evaluate()
@@ -199,6 +249,7 @@ class ListenService : Service() {
     private fun shutdown(final: AppState.Mode = AppState.Mode.OFF) {
         running = false
         stoppedByVoice = false
+        playbackPaused = false
         AppState.setPaused(false)
         stopRec()
         AppState.setMode(final)
@@ -210,6 +261,7 @@ class ListenService : Service() {
         AppState.listeners.remove(stateListener)
         stopRec()
         model?.close()
+        worker.shutdown()
         if (AppState.mode != AppState.Mode.ERROR) AppState.setMode(AppState.Mode.OFF)
         super.onDestroy()
     }
