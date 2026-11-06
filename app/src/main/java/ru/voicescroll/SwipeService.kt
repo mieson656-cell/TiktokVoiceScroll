@@ -35,15 +35,57 @@ class SwipeService : AccessibilityService() {
         return super.onUnbind(intent)
     }
 
+    private val gestureHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var swipeInProgress = false
+
     fun swipe(up: Boolean): Boolean {
+        if (swipeInProgress) {
+            AppState.message = "Предыдущий свайп ещё выполняется, повторяю команду…"
+            AppState.fire()
+            return false
+        }
+        swipeInProgress = true
+        AppState.message = "Отправляю свайп…"
+        AppState.fire()
+        dispatchSwipe(up, 0)
+        return true
+    }
+
+    /** dispatchGesture() подтверждает только отправку. Результат жеста приходит асинхронно,
+     * поэтому проверяем завершение и повторяем попытку, если Android отменил жест. */
+    private fun dispatchSwipe(up: Boolean, attempt: Int) {
+        if (attempt >= 3) {
+            swipeInProgress = false
+            AppState.message = "Android отменил свайп 3 раза. Проверь службу специальных возможностей и попробуй ещё раз."
+            AppState.fire()
+            return
+        }
         val m = resources.displayMetrics
         val x = m.widthPixels * 0.5f
-        val a = m.heightPixels * 0.72f
-        val b = m.heightPixels * 0.28f
-        val path = Path().apply { if (up) { moveTo(x,a); lineTo(x,b) } else { moveTo(x,b); lineTo(x,a) } }
+        val a = m.heightPixels * 0.78f
+        val b = m.heightPixels * 0.22f
+        val path = Path().apply {
+            if (up) { moveTo(x, a); lineTo(x, b) }
+            else { moveTo(x, b); lineTo(x, a) }
+        }
         val duration = AppState.swipeDuration(this).toLong()
-        val g = GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path,0,duration)).build()
-        return dispatchGesture(g,null,null)
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, duration))
+            .build()
+        val accepted = dispatchGesture(gesture, object : GestureResultCallback() {
+            override fun onCompleted(gestureDescription: GestureDescription?) {
+                swipeInProgress = false
+                AppState.message = "Свайп выполнен"
+                AppState.fire()
+            }
+
+            override fun onCancelled(gestureDescription: GestureDescription?) {
+                gestureHandler.postDelayed({ dispatchSwipe(up, attempt + 1) }, 180L)
+            }
+        }, null)
+        if (!accepted) {
+            gestureHandler.postDelayed({ dispatchSwipe(up, attempt + 1) }, 180L)
+        }
     }
 
     private fun tap(x: Float, y: Float): Boolean {
