@@ -110,7 +110,7 @@ class MainActivity : Activity() {
         addGap(page, 4)
         page.addView(text("Голосовое управление", 27f, white, true))
         addGap(page, 3)
-        page.addView(text("Листай TikTok, не касаясь телефона", 14f, muted))
+        page.addView(text("Голосовое управление TikTok и YouTube", 14f, muted))
         addGap(page, 18)
 
         val state = addCard(page)
@@ -121,7 +121,7 @@ class MainActivity : Activity() {
         addGap(state, 7)
         micV = text("Микрофон: выключен", 14f, muted)
         state.addView(micV)
-        appV = text("TikTok: не открыт", 14f, muted)
+        appV = text("Приложение: не открыто", 14f, muted)
         state.addView(appV)
         addGap(state, 10)
         cmdV = text("Последняя команда: —", 14f, green, true)
@@ -175,8 +175,11 @@ class MainActivity : Activity() {
         addGap(commands, 10)
         addCommand(commands, "«Дальше»", "Следующее видео · свайп вверх", green)
         addCommand(commands, "«Назад»", "Предыдущее видео · свайп вниз", green)
-        addCommand(commands, "«Пауза»", "Временно не выполнять свайпы, но продолжать слушать", orange)
-        addCommand(commands, "«Продолжить»", "Снять паузу и снова листать", green)
+        addCommand(commands, "«Пауза» / «Продолжить»", "Поставить видео на паузу или возобновить. Микрофон продолжает слушать.", orange)
+        addCommand(commands, "«Поиск [текст]»", "Открыть поиск и ввести произнесённый запрос", green)
+        addCommand(commands, "«Лайк»", "Поставить отметку «Нравится»", green)
+        addCommand(commands, "«Подпишись»", "Нажать видимую кнопку подписки", green)
+        addCommand(commands, "«Комментарий [текст]»", "Вставить текст в поле комментария, без отправки", green)
         addCommand(commands, "«Стоп»", "Полностью остановить прослушивание", red)
 
         val extras = addCard(page)
@@ -256,7 +259,7 @@ class MainActivity : Activity() {
         statusV.text = when (m) {
             AppState.Mode.OFF -> "● Выключено"
             AppState.Mode.LOADING -> "● Загружаю модель…"
-            AppState.Mode.WAITING -> "● Жду открытия TikTok"
+            AppState.Mode.WAITING -> "● Жду открытия TikTok или YouTube"
             AppState.Mode.LISTENING -> "● Слушаю команды"
             AppState.Mode.PAUSED -> "Ⅱ Пауза"
             AppState.Mode.STOPPED -> "■ Остановлено командой «Стоп»"
@@ -269,7 +272,7 @@ class MainActivity : Activity() {
             else -> white
         })
         micV.text = "Микрофон: " + if (m == AppState.Mode.LISTENING || m == AppState.Mode.PAUSED) "активен" else "выключен"
-        appV.text = "TikTok: " + if (AppState.tiktok) "открыт" else "не открыт"
+        appV.text = "Приложение: " + if (AppState.target != AppState.Target.NONE) "${AppState.appLabel} открыто" else "не открыто"
         cmdV.text = "Последняя команда: ${AppState.lastCommand}"
         mainBtn.text = when (m) {
             AppState.Mode.OFF, AppState.Mode.ERROR -> "Запустить"
@@ -326,7 +329,7 @@ class MainActivity : Activity() {
     private fun showA11yHelp() {
         AlertDialog.Builder(this)
             .setTitle("Служба специальных возможностей")
-            .setMessage("Она нужна для свайпов и определения, открыт ли TikTok.\n\n1. Настройки → Специальные возможности → Установленные службы → «Голосовой TikTok» → Включить.\n\nЕсли пункт серый («ограниченная настройка»): Настройки → Приложения → «Голосовой TikTok» → ⋮ → «Разрешить ограниченные настройки», затем повтори шаг 1.")
+            .setMessage("Она нужна для свайпов и определения, открыты ли TikTok или YouTube.\n\n1. Настройки → Специальные возможности → Установленные службы → «VoiceScroll» → Включить.\n\nЕсли пункт серый («ограниченная настройка»): Настройки → Приложения → «Голосовой TikTok» → ⋮ → «Разрешить ограниченные настройки», затем повтори шаг 1.")
             .setPositiveButton("Открыть настройки") { _, _ -> startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
             .setNeutralButton("О приложении") { _, _ ->
                 startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
