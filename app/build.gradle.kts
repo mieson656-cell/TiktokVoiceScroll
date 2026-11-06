@@ -9,8 +9,10 @@ android {
         applicationId = "ru.voicescroll"
         minSdk = 29
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        // CI run number makes every published APK a proper Android upgrade.
+        val ciBuild = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+        versionCode = ciBuild
+        versionName = "1.0.$ciBuild"
         ndk { abiFilters += "arm64-v8a" }
     }
     compileOptions {
