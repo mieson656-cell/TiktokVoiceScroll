@@ -5,17 +5,24 @@ import android.content.Context
 /** Общее состояние. Всё вызывается из главного потока. */
 object AppState {
     enum class Mode { OFF, LOADING, WAITING, LISTENING, PAUSED, STOPPED, ERROR }
+    enum class Target { NONE, TIKTOK, YOUTUBE }
 
     val listeners = LinkedHashSet<() -> Unit>()
     var mode = Mode.OFF; private set
-    var tiktok = false; private set
+    var target = Target.NONE; private set
     var testMode = false; private set
     var paused = false; private set
     var lastCommand = "—"
     var message = ""
 
+    val appLabel: String get() = when (target) {
+        Target.TIKTOK -> "TikTok"
+        Target.YOUTUBE -> "YouTube"
+        Target.NONE -> "не поддерживается"
+    }
+
     fun setMode(m: Mode) { if (m != mode) { mode = m; fire() } }
-    fun setTikTok(v: Boolean) { if (v != tiktok) { tiktok = v; fire() } }
+    fun setTarget(v: Target) { if (v != target) { target = v; fire() } }
     fun setTestMode(v: Boolean) { if (v != testMode) { testMode = v; fire() } }
     fun setPaused(v: Boolean) { if (v != paused) { paused = v; fire() } }
     fun fire() { listeners.toList().forEach { it() } }
